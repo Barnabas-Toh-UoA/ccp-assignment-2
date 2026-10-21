@@ -78,6 +78,15 @@ public class CommandLineController {
     }
 
     private void parse() {
+        // Pre-scan all arguments to detect help flags regardless of errors or argument order
+        for (String arg : args) {
+            if ("-h".equals(arg) || "--help".equals(arg)) {
+                helpRequested = true;
+            } else if (arg.startsWith("-") && !arg.startsWith("--") && arg.contains("h")) {
+                helpRequested = true;
+            }
+        }
+
         List<String> videoFiles = new ArrayList<>();
 
         for (String arg : args) {
@@ -246,7 +255,7 @@ public class CommandLineController {
         System.out.println("  -1, --monitor-1    Open the player on display 1");
         System.out.println("  -2, --monitor-2    Open the player on display 2");
         System.out.println();
-        System.out.println("Frame Processors");
+        System.out.println("Frame processors:");
         System.out.println("  -n, --number-frames    Render the frame number onto each frame");
         System.out.println("  -s, --scratch-frames   Render vertical film scratches");
         System.out.println("  -f, --flicker-frames   Randomly dim frames");
@@ -260,6 +269,7 @@ public class CommandLineController {
         System.out.println("  -p, --pepper-frames    Pepper frames with dark spots/blotches");
         System.out.println();
         System.out.println("Frame processors are applied in command-line order and may be repeated.");
-        System.out.println("Example: -nssnfwyvdjmbp numbers, scratches twice, numbers again, flickers, converts, warms, vignettes, dusts, jitters, mottles, bleeds, then peppers.");
+        System.out.println("Example: -nssnfwyvdjmbp numbers, scratches twice, numbers again, flickers,");
+        System.out.println("converts, warms, vignettes, dusts, jitters, mottles, bleeds, then peppers.");
     }
 }

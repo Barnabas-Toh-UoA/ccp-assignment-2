@@ -236,8 +236,8 @@ public class VideoPlayerModel {
             openPlaybackResources(startTimestampUs);
             resetPlaybackClock(currentTimestampUs);
             playbackOpen = true;
-            playbackTimer.start();
             startPipelineThreads();
+            playbackTimer.start();
             notifyPlaybackStateChanged();
         } catch (Exception e) {
             handlePlaybackError(e);
@@ -483,26 +483,28 @@ public class VideoPlayerModel {
 
         PreparedFrame nextFrame = preparedFrames.peek();
 
+        // Check if the stream has finished and the final frame has been displayed
         if (nextFrame != null && nextFrame.isEndOfStream()) {
             preparedFrames.poll();
             finishPlayback();
             return;
         }
 
-        // Anchor the playback clock the moment the first frame is ready for display
+        // Anchor the master playback clock when the first frame arrives in the queue
         if (nextFrame != null && playbackStartNs == 0) {
             playbackStartNs = now;
             if (pauseRequested) {
                 pauseStartedNs = now;
-                // Display the initial frame when starting/seeking while paused
-                displayPreparedFrame(preparedFrames.poll(), now);
+                // Render the first frame on screen when opening or seeking while paused
+                displayPreparedFrame(preparedFrames.poll(), now, now);
                 return;
             }
         }
 
-        // Task (1): Keep audio flowing
+        // Task (1): Keep audio flowing if sound is enabled
         writeDueAudio(now);
 
+        // Do not advance video frames if paused or if the playback clock hasn't started yet
         if (pauseRequested || playbackStartNs == 0) {
             return;
         }
@@ -511,12 +513,12 @@ public class VideoPlayerModel {
         if (nextFrame != null) {
             long targetTimeNs = playbackStartNs + nextFrame.relativeTimestampUs() * 1_000L;
             if (targetTimeNs <= now) {
-                displayPreparedFrame(preparedFrames.poll(), targetTimeNs);
+                displayPreparedFrame(preparedFrames.poll(), targetTimeNs, now);
             }
         }
     }
 
-    private void displayPreparedFrame(PreparedFrame frame, long targetTimeNs) {
+    private void displayPreparedFrame(PreparedFrame frame, long targetTimeNs, long now) {
         if (frame == null) {
             return;
         }
@@ -525,7 +527,7 @@ public class VideoPlayerModel {
         relativeSeekBaseUs = NO_SEEK_REQUEST;
 
         if (intFrameRate > 0 && frame.frameNumber() % intFrameRate == 0) {
-            long remainingUs = (targetTimeNs - frame.preparedAtNs()) / 1_000L;
+            long remainingUs = (targetTimeNs - now) / 1_000L;
             if (remainingUs < 0) {
                 System.out.printf("Frame headroom is \u001B[31m%5dus\u001B[0m out of %dus spare.%n",
                         remainingUs,
