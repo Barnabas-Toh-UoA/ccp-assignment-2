@@ -25,6 +25,6 @@ target/
 hs_err_pid*
 replay_pid*
 
-*.vscode
+/.vscode/
 
 *trailer.mp4
