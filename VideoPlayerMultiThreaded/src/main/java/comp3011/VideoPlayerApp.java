@@ -87,6 +87,7 @@ public class VideoPlayerApp extends Application {
     }
 
     private void playVideo() {
+        controller.setFrameProcessors(commandLineController.getFrameProcessors());
         controller.play(commandLineController.getVideoFile());
     }
 
