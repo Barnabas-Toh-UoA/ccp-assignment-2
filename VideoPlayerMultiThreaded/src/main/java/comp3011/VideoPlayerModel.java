@@ -44,7 +44,7 @@ public class VideoPlayerModel {
     private static final long NO_SEEK_REQUEST = -1; // Sentinel value used when no seek position is active.
     private static final long FIVE_SECONDS_US = 5_000_000L;
     private static final long AUDIO_LEAD_NS = 30_000_000L;
-    private static final int QUEUE_CAPACITY = 8; // Bounded queue size per pipeline stage
+    private static final int QUEUE_CAPACITY = 3; // Bounded queue size per pipeline stage
 
     private final List<FrameProcessor> frameProcessors;
     private final Queue<PendingAudio> pendingAudio = new ConcurrentLinkedQueue<>();
@@ -300,33 +300,61 @@ public class VideoPlayerModel {
         pipelineRunning = true;
         int numProcessors = frameProcessors.size();
 
-        // Create queues connecting: Decoder -> Processor 0 -> ... -> Processor N-1 -> Converter
-        List<BlockingQueue<RawVideoFrame>> stageQueues = new ArrayList<>(numProcessors + 1);
-        for (int i = 0; i <= numProcessors; i++) {
+        if (numProcessors == 0) {
+            // No effects: direct pipeline (Decoder -> Converter)
+            BlockingQueue<RawVideoFrame> directQueue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+            Thread decoder = new Thread(() -> runDecoderStage(directQueue), "Pipeline-Decoder");
+            Thread converter = new Thread(() -> runConverterStage(directQueue), "Pipeline-Converter");
+            decoder.setDaemon(true);
+            converter.setDaemon(true);
+            pipelineThreads.add(decoder);
+            pipelineThreads.add(converter);
+            decoder.start();
+            converter.start();
+            return;
+        }
+
+        // Reserve 1 core for JavaFX rendering/audio, use the rest for worker stages
+        int availableCores = Runtime.getRuntime().availableProcessors();
+        int maxWorkerStages = Math.max(1, availableCores - 1);
+        int numStages = Math.min(maxWorkerStages, numProcessors);
+
+        // Partition the processors evenly across the worker stages
+        List<List<FrameProcessor>> stageBatches = new ArrayList<>();
+        for (int i = 0; i < numStages; i++) {
+            stageBatches.add(new ArrayList<>());
+        }
+        for (int i = 0; i < numProcessors; i++) {
+            stageBatches.get(i % numStages).add(frameProcessors.get(i));
+        }
+
+        // Create queues connecting: Decoder -> Stage 0 -> Stage 1 ... -> Stage N-1 -> Converter
+        List<BlockingQueue<RawVideoFrame>> stageQueues = new ArrayList<>(numStages + 1);
+        for (int i = 0; i <= numStages; i++) {
             stageQueues.add(new ArrayBlockingQueue<>(QUEUE_CAPACITY));
         }
 
-        // 1. Decoder Thread (Stage 0)
+        // 1. Decoder Thread
         BlockingQueue<RawVideoFrame> decoderOut = stageQueues.get(0);
         Thread decoderThread = new Thread(() -> runDecoderStage(decoderOut), "Pipeline-Decoder");
         decoderThread.setDaemon(true);
         pipelineThreads.add(decoderThread);
 
-        // 2. FrameProcessor Threads (Stages 1 .. N)
-        for (int i = 0; i < numProcessors; i++) {
-            final FrameProcessor processor = frameProcessors.get(i);
+        // 2. Batched Processor Threads
+        for (int i = 0; i < numStages; i++) {
+            final List<FrameProcessor> batch = stageBatches.get(i);
             final BlockingQueue<RawVideoFrame> inQueue = stageQueues.get(i);
             final BlockingQueue<RawVideoFrame> outQueue = stageQueues.get(i + 1);
 
             Thread processorThread = new Thread(
-                    () -> runProcessorStage(processor, inQueue, outQueue),
-                    "Pipeline-Processor-" + i);
+                    () -> runBatchedProcessorStage(batch, inQueue, outQueue),
+                    "Pipeline-Worker-" + i);
             processorThread.setDaemon(true);
             pipelineThreads.add(processorThread);
         }
 
-        // 3. Converter Thread (Final Stage -> preparedFrames)
-        BlockingQueue<RawVideoFrame> converterIn = stageQueues.get(numProcessors);
+        // 3. Converter Thread
+        BlockingQueue<RawVideoFrame> converterIn = stageQueues.get(numStages);
         Thread converterThread = new Thread(() -> runConverterStage(converterIn), "Pipeline-Converter");
         converterThread.setDaemon(true);
         pipelineThreads.add(converterThread);
@@ -334,7 +362,6 @@ public class VideoPlayerModel {
         for (Thread t : pipelineThreads) {
             t.start();
         }
-
     }
 
     private void stopPipelineThreads() {
@@ -408,8 +435,8 @@ public class VideoPlayerModel {
         }
     }
 
-    private void runProcessorStage(
-            FrameProcessor processor,
+    private void runBatchedProcessorStage(
+            List<FrameProcessor> batch,
             BlockingQueue<RawVideoFrame> inQueue,
             BlockingQueue<RawVideoFrame> outQueue) {
         try {
@@ -420,7 +447,10 @@ public class VideoPlayerModel {
                     return;
                 }
 
-                processor.process(raw.frame(), raw.info());
+                for (FrameProcessor processor : batch) {
+                    processor.process(raw.frame(), raw.info());
+                }
+
                 outQueue.put(raw);
             }
         } catch (InterruptedException e) {
