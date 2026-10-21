@@ -1,3 +1,6 @@
+VideoPlayerSingleThread/.gitignore
+trailer.mp4
+
 # Compiled class file
 *.class
 
@@ -23,3 +26,5 @@ hs_err_pid*
 replay_pid*
 
 *.vscode
+
+*trailer.mp4
